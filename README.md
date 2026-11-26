@@ -27,3 +27,21 @@ py -3.12 -m venv .venv-build
 产物为 `dist/Token计费工具.exe`。测试通过后关闭旧窗口，再用新 EXE 替换旧文件。单文件包含界面和 Python 依赖，不包含用户工作簿；WebView2 仍由 Windows 提供。修改源代码后需要重新打包，已经生成的 EXE 不会自动更新。此版本没有发行者代码签名。
 
 更多用量单位、报价工作表格式和操作说明见 [使用说明](使用说明.md)。
+# 我的社交媒体
+单击放大图片扫码
+<table style="border: 1px solid #9FA0A0; border-collapse: collapse; width: auto;">
+    <tr>
+      <th style="border: 1px solid #9FA0A0; padding: 0; background-color: #000000; text-align: center; height: auto; width: auto;">
+        <a href="https://discord.gg/ArErrjXT53" rel="noopener noreferrer">
+          <img src="https://github.com/idesign2018/Meta_IDesign/blob/master/QRCode/Discord-2.jpg?raw=true" alt="立即加入Discord社区" style="display: block; margin: 0 auto; max-width: 100%;"></a>DC社区</th>
+      <th style="border: 1px solid #9FA0A0; padding: 0; background-color: #000000; text-align: center; height: auto;">
+      <a rel="noopener noreferrer">
+          <img src="https://github.com/idesign2018/Meta_IDesign/blob/master/QRCode/xhs.jpg?raw=true" alt="小红书" style="display: block; margin: 0 auto; max-width: 100%;"></a>小红书主页</th>
+        <th style="border: 1px solid #9FA0A0; padding: 0; background-color: #000000; text-align: center; height: auto; width: auto;">
+        <a rel="noopener noreferrer">
+          <img src="https://github.com/idesign2018/Meta_IDesign/blob/master/QRCode/WeChat.jpg?raw=true" alt="微信" style="display: block; margin: 0 auto; max-width: 100%;"></a>加微信好友</th>
+      <th style="border: 1px solid #9FA0A0; padding: 0; background-color: #000000; text-align: center; height: auto;">
+      <a rel="noopener noreferrer">
+          <img src="https://github.com/idesign2018/Meta_IDesign/blob/master/QRCode/wxzf-2.jpg?raw=true" alt="微信支付" style="display: block; margin: 0 auto; max-width: 100%;"></a>请我喝咖啡WX</th>
+    </tr>
+</table>
