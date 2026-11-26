@@ -8,7 +8,8 @@
 - **网页版**：双击 `启动Token计算.cmd`。也可直接打开 `Token计算.html` 试算，但直接打开时不能扫描或写入 Excel。
 - **自定义报价**：默认从 EXE 或网页版程序旁的 `报价单文件` 目录读取 Excel，也可在界面指定其他本地目录。携带程序时，想保留已有报价需一起复制报价目录。
 - **系统报价**：只读取程序旁 `报价单/系统报价单.xlsx` 或 `报价单/内置报价单.xlsx`，没有工作簿就没有系统报价。不会在 JavaScript 或 EXE 中内嵌兜底价格。删除后刷新报价目录或重新打开程序即可；`报价单文件` 中的自定义报价不受影响。历史备份不会被扫描。
-<img width="1344" height="714" alt="程序UI" src="https://github.com/user-attachments/assets/e96357fd-435f-4e5d-9b36-e45373b51b67" />
+
+<img alt="程序UI" src="https://github.com/idesign2018/Token-JS/blob/main/%E6%A1%8C%E9%9D%A2%E7%89%88/%E7%A8%8B%E5%BA%8FUI.png" />
 
 ## 用量与报价联动
 
