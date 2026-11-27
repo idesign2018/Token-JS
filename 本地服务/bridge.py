@@ -24,7 +24,7 @@ ROOT = Path(__file__).absolute().parent.parent
 LOOPBACK = str(ipaddress.IPv4Address(0x7F000001))
 ENTRY = 'Token计算.html'
 QUOTE_DIRECTORY = ROOT / '报价单文件'
-SYSTEM_WORKBOOK = ROOT / '报价单' / '系统报价单.xlsx'
+SYSTEM_QUOTE_DIRECTORY = ROOT / '报价单'
 META = b'<meta name="billing-bridge" content="">'
 TOKEN_HEADER = 'X-Billing-Token'
 MAX_BODY = 2_000_000
@@ -38,12 +38,14 @@ STATIC_TYPES = {
     '报价单/search.js': 'text/javascript; charset=utf-8',
     '报价单/excel.js': 'text/javascript; charset=utf-8',
     '报价单/html-import.js': 'text/javascript; charset=utf-8',
+    '报价HTML通用识别/识别.js': 'text/javascript; charset=utf-8',
 }
 REQUEST_FIELDS = {
     '/api/scan': {'path'},
     '/api/save': {'path', 'filename', 'rows'},
     '/api/match': {'path', 'filename'},
     '/api/append': {'path', 'filename', 'rows'},
+    '/api/delete-quote': {'path', 'filename', 'sheet', 'line', 'revision'},
     '/api/open-folder': set(),
 }
 
@@ -278,16 +280,24 @@ class Handler(BaseHTTPRequestHandler):
             folder = local_directory(payload['path'])
             if self.path == '/api/scan':
                 result = self.server.workbooks.scan(folder)
-                try:
-                    system_folder = local_directory(str(SYSTEM_WORKBOOK.parent))
-                except RequestError as error:
-                    if error.status != HTTPStatus.NOT_FOUND:
-                        raise
-                    system = {'rows': [], 'warnings': []}
-                else:
-                    system = self.server.workbooks.scan(system_folder, filenames={SYSTEM_WORKBOOK.name, '内置报价单.xlsx'})
+                system = {'rows': [], 'warnings': [], 'files': 0}
+                same_directory = folder == SYSTEM_QUOTE_DIRECTORY
+                if not same_directory:
+                    try:
+                        system_folder = local_directory(str(SYSTEM_QUOTE_DIRECTORY))
+                        system = self.server.workbooks.scan(system_folder)
+                    except (RequestError, ValueError, OSError) as error:
+                        if not isinstance(error, RequestError) or error.status != HTTPStatus.NOT_FOUND:
+                            system['warnings'].append(f'系统内置目录：{error}')
                 result['systemRows'] = system['rows']
+                result['systemFiles'] = system['files']
+                result['includesSystem'] = same_directory
                 result['warnings'].extend(system['warnings'])
+            elif self.path == '/api/delete-quote':
+                try:
+                    result = self.server.workbooks.delete_quote(folder, payload['filename'], payload['sheet'], payload['line'], payload['revision'])
+                except (self.server.workbooks.WorkbookConflictError, FileNotFoundError) as error:
+                    raise RequestError(HTTPStatus.CONFLICT, str(error)) from error
             elif self.path == '/api/match':
                 result = {'filename': self.server.workbooks.match(folder, payload['filename'])}
             else:

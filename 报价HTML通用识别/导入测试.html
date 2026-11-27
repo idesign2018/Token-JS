@@ -1,0 +1,35 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>报价 HTML 回归测试</title>
+<pre id="result">未运行</pre>
+<script src="../计费/billing.js"></script>
+<script>const { fields, parseDecimal } = Billing;</script>
+<script src="识别.js"></script>
+<script src="../报价单/html-import.js"></script>
+<script>
+const check = (label, condition) => { if (!condition) throw new Error(label); };
+const parse = (html, defaults) => HtmlQuotes.parse(html, defaults).rows;
+const table = (labels, amounts, caption = '') => `<table>${caption ? `<caption>${caption}</caption>` : ''}<thead><tr>${labels.map(v => `<th>${v}</th>`).join('')}</tr></thead><tbody><tr>${amounts.map(v => `<td>${v}</td>`).join('')}</tr></tbody></table>`;
+const scenarios = [
+  ['原精确表格', () => { const [r] = parse(table(['模型', '输入 / 1M Tokens', '输出 / 1M Tokens'], ['old', '$0.50 起', '$1'])); check('精确金额、币种与起价', r.prices.input === '0.50' && r.unit === 'credit' && r.starting[0] === 'input'); }],
+  ['原精确列表', () => { const [r] = parse('<ul aria-label="模型列表"><li><div class="group/name"><span data-slot="tooltip-trigger">legacy-v3</span></div><dl><dt>输入 / 1M Tokens</dt><dd>¥2</dd></dl></li></ul>'); check('精确列表', r.model === 'legacy-v3' && r.prices.input === '2'); }],
+  ['原精确分组阶梯', () => { const [r, next] = parse('<table><thead><tr><th rowspan="2">模型</th><th colspan="3">分组标准价 / 1M Tokens</th></tr><tr><th>输入</th><th>输出</th><th>缓存</th></tr></thead><tbody><tr><td>old</td><td><div>≤32K $1</div><div>&gt;32K $2</div></td><td><div>$3</div><div>$4</div></td><td><div>写入 $1 读取 $0.1</div><div>写入 $2 读取 $0.2</div></td></tr></tbody></table>'); check('原分档', r.group === '≤32K' && r.prices.read === '0.1' && next.prices.output === '4'); }],
+  ['常见字段、纯数字、1M 与独立型号版本', () => { const [r] = parse(table(['模型', '版本号', '型号', 'Prompt', 'Completion', 'Cache hit', 'Cache write'], ['Example', '3.5', 'mini', '0.4000', '2', '0.05', '0.20'], 'USD / 1M')); check('模型与单价', r.model === 'Example 3.5 mini' && r.unit === 'credit' && r.prices.input === '0.4000' && r.prices.read === '0.05' && r.prices.write === '0.20'); }],
+  ['双层表头、缓存读写及千 Token', () => { const [r] = parse('<table><thead><tr><th rowspan="2">Model ID</th><th colspan="4">CNY / 1K Tokens</th></tr><tr><th>Input</th><th>Output</th><th>缓存读</th><th>缓存写</th></tr></thead><tbody><tr><td>vendor/model-v2-mini</td><td>0.0004</td><td>0.004</td><td>0</td><td>0.0002</td></tr></tbody></table>'); check('分组表 自动换算', r.model === 'vendor/model-v2-mini' && r.unit === 'cny' && r.prices.input === '0.4' && r.prices.output === '4' && r.prices.read === '0'); }],
+  ['缓存父表头 + 单字子表头', () => { const [r] = parse('<table><caption>人民币 / 1M Token</caption><thead><tr><th rowspan="2">模型</th><th colspan="2">缓存</th></tr><tr><th>读</th><th>写</th></tr></thead><tbody><tr><td>x</td><td>0.1</td><td>0.2</td></tr></tbody></table>'); check('中文子表头', r.prices.read === '0.1' && r.prices.write === '0.2'); }],
+  ['独立卡片、行内单位、每 Token', () => { const rs = parse('<section><article><h3>model-v3-mini</h3><p>输入：0.4000 1M Token</p><dl><dt>输出</dt><dd>0.000003 / Token</dd></dl></article><article><h3>model-v4-mini</h3><div><span>Input</span><span>¥0.005 / 1K Tokens</span></div></article></section>'); check('卡片隔离与换算', rs.length === 2 && rs[0].prices.input === '0.4000' && rs[0].prices.output === '3' && rs[0].unit === '' && rs[1].prices.input === '5'); }],
+  ['无计价数量和笼统缓存：不猜', () => { const [r] = parse(table(['Model', 'Input Tokens', 'Output', 'Cache'], ['unknown', '0.4', '0.8 Tokens', '¥2'])); check('保留具体警告但金额留空', !r.prices.input && !r.prices.output && !r.prices.read && !r.prices.write && r.note.includes('计价数量') && r.note.includes('未区分读写')); }],
+  ['拒绝冲突单位、图片单价和差异档', () => { const [r] = parse(table(['Model', 'Input / 1M Tokens', 'Output', 'Cache read', '缓存读取'], ['guarded', '$2 / 1K Tokens', '$0.2 / image', '$0.1 / 1M', '$0.2 / 1M'])); check('不选冲突金额', !r.prices.input && !r.prices.output && !r.prices.read && r.note.includes('计价单位冲突') && r.note.includes('未选档')); }],
+  ['币种不明确或混用不自动选择', () => { const [r] = parse(table(['Model', 'Input / 1M', 'Output / 1M'], ['no-currency', '0.4000', '$1'])); const [mixed] = parse(table(['Model', 'Input / 1M', 'Output / 1M'], ['mixed', '¥1', 'USD 2'])); check('待确认与混合币种', r.unit === '' && r.prices.input === '0.4000' && mixed.mixed && !mixed.prices.input); }],
+  ['精确与通用格式共存', () => { const a = table(['模型', '输入 / 1M Tokens', '输出 / 1M Tokens'], ['old', '$1', '2'], 'USD / 1M'); const b = table(['Model', 'Input'], ['new-v3', 'CNY 0.2 / 1M Tokens']); const rs = parse(a + b); check('不重复且补齐显式币种字段', rs.length === 2 && rs[0].prices.input === '1' && rs[0].prices.output === '2' && rs[1].prices.input === '0.2'); }],
+  ['精确分组表补齐纯数字和同格缓存', () => {
+    const rs = parse('<table><caption>人民币</caption><thead><tr><th rowspan="2">模型</th><th colspan="3">分组标准价 / 1M Tokens</th></tr><tr><th>输入</th><th>输出</th><th>缓存</th></tr></thead><tbody><tr><td>old</td><td>¥1</td><td>¥3</td><td>读 ¥0.1</td></tr><tr><td>new</td><td>0.4000</td><td>2</td><td>写：0.3 读：0.2</td></tr></tbody></table>');
+    check('补齐旧表中的新格式', rs.length === 2 && rs[0].prices.input === '1' && rs[1].prices.input === '0.4000' && rs[1].prices.read === '0.2' && rs[1].prices.write === '0.3');
+  }],
+  ['卡片单位和缓存未命中', () => {
+    const [r] = parse('<article><h3>next-v3</h3><p>输入 / 1M Tokens 0.4000</p><p>输出 2</p><p>每 1M Tokens</p><dl><dt>Cache miss</dt><dd>0.5</dd></dl></article>');
+    check('共享单位、行内单位、未命中不当作写入', r.prices.input === '0.4000' && r.prices.output === '2' && !r.prices.write && r.note.includes('未区分读写'));
+  }],
+  ['不执行 HTML，非报价不给结果', () => { parse('<img src="missing" onerror="window.ran=1"><script>window.ran=1<\/script>' + table(['Model', 'Input'], ['x', '$1 / 1M Token'])); check('脚本未执行', !window.ran); try { parse('<div>一段无关信息</div>'); } catch (error) { check('可读错误', error.message.includes('未识别')); return; } throw new Error('误导入无关内容'); }]
+];
+try { for (const [label, test] of scenarios) { try { test(); } catch (error) { throw new Error(label + ': ' + error.message); } } document.querySelector('#result').textContent = 'PASS ' + scenarios.length; }
+catch (error) { document.querySelector('#result').textContent = 'FAIL ' + error.message; }
+</script>

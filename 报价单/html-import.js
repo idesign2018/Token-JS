@@ -61,7 +61,8 @@ const HtmlQuotes = (() => {
           if (!amounts.has(id)) amounts.set(id, price);
           else if (!previous || previous.value !== price.value || previous.unit !== price.unit || previous.starting !== price.starting) amounts.set(id, null);
         }
-        append(model || amounts.size ? quote(defaults, model, group, amounts) : null);
+        const precise = model || amounts.size ? quote(defaults, model, group, amounts) : null;
+        append(amounts.size ? precise : GenericHtmlQuotes.card(li, { ...defaults, group }, model) || precise);
       }
     }
   }
@@ -71,7 +72,7 @@ const HtmlQuotes = (() => {
     return normalize(button?.getAttribute('aria-label').slice('复制模型 ID '.length) || ownText(cell));
   }
 
-  function flatTable(table, defaults, append) {
+  function flatTable(table, defaults, covered) {
     const header = table.tHead?.rows[0] || table.rows[0];
     if (!header || [...header.cells].some(cell => cell.colSpan !== 1)) return;
     const names = [...header.cells].map(ownText);
@@ -88,7 +89,8 @@ const HtmlQuotes = (() => {
         const price = key && parsePrice(ownText(row.cells[col]));
         if (price) amounts.set(key, price);
       });
-      append(amounts.size ? quote(defaults, modelFromCell(row.cells[modelColumn]), group, amounts) : null);
+      if (amounts.size) covered.set(row, quote(defaults, modelFromCell(row.cells[modelColumn]), group, amounts));
+      else covered.set(row, null);
     }
   }
 
@@ -115,24 +117,24 @@ const HtmlQuotes = (() => {
       if (row.closest('thead') || row.cells.length < 4) continue;
       const [modelCell, inputCell, outputCell, cacheCell] = row.cells;
       const inputBlocks = cellBlocks(inputCell);
-      if (inputBlocks.some(value => /按(?:图片|次|张|秒)计费|\/\s*(?:张|次|秒)/.test(value))) { append(null); continue; }
+      if (inputBlocks.some(value => /按(?:图片|次|张|秒)计费|\/\s*(?:张|次|秒)/.test(value))) { append(null, row); continue; }
       const model = modelFromCell(modelCell);
       const schedule = ownText(modelCell.querySelector('span[title*="该时段"]'));
       const outputs = cellBlocks(outputCell);
       const caches = cellBlocks(cacheCell);
       for (const [index, input] of inputBlocks.entries()) {
         const band = /^(?:[≤≥<>]=?\s*\d+(?:\.\d+)?\s*[KMB])\s*/i.exec(input)?.[0] || '';
-        if (inputBlocks.length > 1 && !band) { append(null); continue; }
+        if (inputBlocks.length > 1 && !band) { append(null, row); continue; }
         const [write, read] = cacheValues(caches.length === inputBlocks.length ? caches[index] : (inputBlocks.length === 1 ? caches[0] : ''));
         const amounts = new Map([
           ['input', parsePrice(input.slice(band.length))],
           ['output', outputs.length === inputBlocks.length ? parsePrice(outputs[index]) : null], ['read', read], ['write', write]
         ].filter(([, price]) => price));
         const note = /\(\s*\d+\s*[hms]/i.test(caches[index] || '') && write ? '缓存写为页面显示的基础价；括号中的其他时长单价请按需手动替换。' : '';
-        append(amounts.size ? quote(defaults, model, splitGroup(group, schedule, band.trim()), amounts, note) : null);
+        append(amounts.size ? quote(defaults, model, splitGroup(group, schedule, band.trim()), amounts, note) : null, row);
       }
     }
-    return true;
+    return { group };
   }
 
   function parse(text, defaults = {}) {
@@ -155,9 +157,25 @@ const HtmlQuotes = (() => {
     }
     listQuotes(content, defaults, append);
     for (const table of content.querySelectorAll('table')) {
-      if (!groupedTable(table, defaults, append)) flatTable(table, defaults, append);
+      const covered = new Map();
+      const fallback = new Map();
+      const tiers = new Map();
+      const grouped = groupedTable(table, defaults, (row, source) => {
+        if (!tiers.has(source)) tiers.set(source, []);
+        tiers.get(source).push(row);
+      });
+      if (!grouped) flatTable(table, defaults, covered);
+      const excluded = new Set([...tiers].filter(([, quotes]) => quotes.some(Boolean)).map(([source]) => source));
+      GenericHtmlQuotes.tables(table, grouped ? { ...defaults, group: grouped.group } : defaults,
+        (row, source) => fallback.set(source, row), covered, excluded);
+      for (const source of table.rows) {
+        const precise = tiers.get(source);
+        if (precise && (excluded.has(source) || !fallback.has(source))) precise.forEach(append);
+        else if (covered.has(source) || fallback.has(source)) append(covered.get(source) || fallback.get(source));
+      }
     }
-    if (!rows.length) throw new Error('未识别到报价。请复制完整的模型列表或含表头的每百万 Token 定价表外部 HTML。');
+    GenericHtmlQuotes.cards(content, defaults, append);
+    if (!rows.length) throw new Error('未识别到报价。请复制含模型、价格标签和金额的完整表格或模型卡片外部 HTML。');
     return { rows, skipped };
   }
   return { parse };
@@ -207,8 +225,10 @@ function connectHtmlImport() {
       render();
       code.value = '';
       const missingModel = rows.some(row => !row.model);
+      const review = rows.filter(row => row.note || row.mixed || row.starting.length).length;
       const note = '已追加 ' + rows.length + ' 条报价' + (skipped ? '（跳过 ' + skipped + ' 条重复、非 Token 或无法识别的记录）' : '') + '。' +
-        (missingModel ? '部分记录没有模型名，请在表中补齐。' : '请补齐空项、核对价格，再勾选对比。');
+        (review ? review + ' 条需核对；可展开报价查看说明。' : '') +
+        (missingModel ? '部分记录没有模型名，请在表中补齐。' : '请核对价格、补齐空项后再对比。');
       message(status, note);
     } catch (error) { message(status, '未导入：' + error.message, true); }
   });

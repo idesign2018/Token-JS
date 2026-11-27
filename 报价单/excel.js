@@ -77,8 +77,11 @@ async function scanWorkbooks({ quiet = false, afterSave = false } = {}) {
     excelPath.title = result.path;
     if (!excelPath.value.trim()) excelPath.placeholder = result.path;
     if (afterSave) return;
-    const note = '已读取 ' + result.files + ' 个 Excel 文件，载入 ' + result.rows.length + ' 条报价。';
-    quoteStatus(note);
+    const describe = (files, rows) => files + ' 个 Excel，' + rows + ' 条报价';
+    const activeSource = excelPath.value.trim() ? '所选目录' : '默认目录';
+    quoteStatus(result.includesSystem
+      ? '所选目录即系统内置目录：' + describe(result.files, result.rows.length) + '。'
+      : '系统内置：' + describe(result.systemFiles, result.systemRows.length) + '；' + activeSource + '：' + describe(result.files, result.rows.length) + '。');
   } catch (error) {
     if (version !== scanVersion || error.name === 'AbortError') return;
     if (!afterSave) {
@@ -87,6 +90,49 @@ async function scanWorkbooks({ quiet = false, afterSave = false } = {}) {
       quoteStatus('未读取 Excel：' + error.message, true);
     }
   }
+}
+
+function confirmQuoteRemoval(entry) {
+  const dialog = byId('quote-delete-dialog');
+  const checkbox = byId('quote-delete-workbook');
+  const cancel = byId('quote-delete-cancel');
+  const confirm = byId('quote-delete-confirm');
+  const error = byId('quote-delete-error');
+  const ref = entry.sourceRef;
+  const canDelete = Boolean(bridgeToken && ref);
+  const name = quoteName({ platform: entry.controls.platform.value, model: entry.controls.model.value, group: groupValue(entry) });
+  byId('quote-delete-name').textContent = '报价 ' + entry.letter + (name ? ' · ' + name : '');
+  byId('quote-delete-source').textContent = canDelete ? '来源：' + ref.filename + ' / ' + ref.sheet + '（第 ' + ref.line + ' 行）' : '这条报价没有可删除的 Excel 来源，只能从页面移除。';
+  checkbox.checked = false;
+  checkbox.disabled = !canDelete;
+  message(error, '', true);
+  cancel.onclick = () => dialog.close();
+  dialog.oncancel = event => { if (confirm.disabled) event.preventDefault(); };
+  confirm.onclick = async () => {
+    if (checkbox.checked && canDelete) {
+      confirm.disabled = cancel.disabled = checkbox.disabled = true;
+      message(error, '', true);
+      try {
+        const result = await requestWorkbook('delete-quote', ref);
+        const sameFile = source => source && source.path === ref.path && source.filename === ref.filename && source.revision === ref.revision;
+        for (const other of quoteEntries) {
+          if (!sameFile(other.sourceRef)) continue;
+          const source = other.sourceRef;
+          other.sourceRef = source.sheet === ref.sheet && source.line === ref.line ? null : { ...source, revision: result.revision };
+        }
+        await scanWorkbooks({ quiet: true });
+      } catch (failure) {
+        message(error, failure.message, true);
+        return;
+      } finally {
+        confirm.disabled = cancel.disabled = checkbox.disabled = false;
+      }
+    }
+    dialog.close();
+    removeQuote(entry);
+    (selectedQuote?.controls['action-trigger'] ?? byId('add-blank')).focus({ preventScroll: true });
+  };
+  dialog.showModal();
 }
 
 function connectWorkbookControls() {

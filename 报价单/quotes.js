@@ -1,5 +1,24 @@
 'use strict';
 const quoteEntries = [];
+let selectedQuote = null;
+
+function syncSidebarLabel() {
+  byId('quote-sidebar-status').textContent = selectedQuote
+    ? '正在编辑报价 ' + selectedQuote.letter
+    : '未选报价';
+}
+
+function selectQuote(entry = null) {
+  if (entry === selectedQuote || (entry && !entry.main.isConnected)) return;
+  selectedQuote?.main.classList.remove('quote-current');
+  selectedQuote = entry;
+  const host = byId('quote-settings-host');
+  if (entry) {
+    entry.main.classList.add('quote-current');
+    host.replaceChildren(entry.controls.settings);
+  } else host.replaceChildren();
+  syncSidebarLabel();
+}
 const catalog = new Map();
 let nextQuoteId = 0;
 
@@ -56,7 +75,7 @@ function syncGroupOptions(entry, selected = groupValue(entry)) {
 }
 
 function syncQuoteAction({ controls, detailsOpen: open, editingGroup }) {
-  controls.extra.hidden = !open && !editingGroup;
+  controls.extra.hidden = !open;
   controls['group-field'].hidden = !editingGroup;
   controls['quote-details'].hidden = !open;
   controls.options.setAttribute('aria-expanded', String(open));
@@ -107,7 +126,7 @@ function refreshCatalog(workbookRows = [], systemRows = loadedSystemRows) {
   refreshQuoteSearch();
 }
 
-const quoteFieldLabels = Object.entries({ platform: '平台', model: '模型名称', group: '分组', unit: '计费', ratio: '充值比例',
+const quoteFieldLabels = Object.entries({ platform: '平台', model: '模型名称', group: '分组', unit: '计费', ratio: '汇算',
   ...Object.fromEntries(fields.map(({ id, label }) => [id, label])) });
 
 function numberQuote(entry, index) {
@@ -213,6 +232,7 @@ function getSuggestionMenu() {
       option.dataset.index = i;
       option.setAttribute('role', 'option');
       option.setAttribute('aria-selected', String(label === value));
+      if (field.disabled?.(label)) option.setAttribute('aria-disabled', 'true');
       return option;
     }));
     const selected = choices.indexOf(value);
@@ -229,7 +249,7 @@ function getSuggestionMenu() {
     draw();
   }
   function choose(index) {
-    if (!field || !choices[index]) return;
+    if (!field || !choices[index] || field.disabled?.(choices[index])) return;
     const input = field.input;
     const value = choices[index];
     close();
@@ -258,8 +278,11 @@ function getSuggestionMenu() {
         if (field !== next || panel.hidden) open(next);
         if (!choices.length || panel.hidden) return;
         const step = event.key === 'ArrowDown' ? 1 : -1;
+        let nextIndex = active < 0 && step < 0 ? choices.length - 1 : active + step;
+        while (nextIndex >= 0 && nextIndex < choices.length && field.disabled?.(choices[nextIndex])) nextIndex += step;
+        if (nextIndex < 0 || nextIndex >= choices.length) return;
         panel.children[active]?.classList.remove('active');
-        active = active < 0 ? (step === 1 ? 0 : choices.length - 1) : Math.max(0, Math.min(choices.length - 1, active + step));
+        active = nextIndex;
         const item = panel.children[active];
         item.classList.add('active');
         next.input.setAttribute('aria-activedescendant', item.id);
@@ -289,7 +312,10 @@ function connectQuoteSuggestions(platform, model) {
     arrow.tabIndex = -1;
     arrow.setAttribute('aria-label', role === 'platform' ? '展开平台选项' : '展开模型选项');
     wrapper.append(arrow);
-    const field = { input, wrapper, values: () => suggestionValues(role, platform.value) };
+    const sidebarPlatform = role === 'platform' && platform.dataset.role === 'platform';
+    const field = { input, wrapper, values: () => suggestionValues(role, platform.value),
+      disabled: sidebarPlatform ? label => !quoteEntries.some(({ controls }) =>
+        platformGroupKey(controls.platform.value) === platformGroupKey(label)) : null };
     arrow.addEventListener('mousedown', event => event.preventDefault());
     arrow.addEventListener('click', event => {
       event.preventDefault();
@@ -324,7 +350,7 @@ function applyMatchingQuote(entry) {
   const group = identityField(groupValue(entry));
   const identity = JSON.stringify([platform, model, group]);
   if (entry.matchIdentity !== identity) {
-    if (entry.matchIdentity !== undefined) delete entry.searchKey;
+    if (entry.matchIdentity !== undefined) { delete entry.searchKey; delete entry.sourceRef; }
     entry.matchIdentity = identity;
   }
   if (!platform || !model) { message(status, ''); return; }
@@ -348,17 +374,20 @@ function applyMatchingQuote(entry) {
       input.removeEventListener('input', input.updateStartingMark);
     }
   }
+  entry.sourceRef = row.sourceRef;
   setQuoteSource(controls, row);
-  message(status, '报价 ' + letter + ' 已按 Excel 更新单价、币种和充值比例。');
+  message(status, '报价 ' + letter + ' 已按 Excel 更新单价、币种和汇算比例。');
 }
 
 function addQuote(data = {}, options = {}) {
   const fragment = byId('quote-template').content.cloneNode(true);
   const main = fragment.firstElementChild;
-  const controls = Object.fromEntries([...fragment.querySelectorAll('[data-role]')].map(node => [node.dataset.role, node]));
+  const settings = byId('quote-settings-template').content.cloneNode(true);
+  const nodes = [...fragment.querySelectorAll('[data-role]'), ...settings.querySelectorAll('[data-role]')];
+  const controls = Object.fromEntries(nodes.map(node => [node.dataset.role, node]));
   // Keep DOM IDs stable when visible letters change after a removal.
   const domId = nextQuoteId++;
-  const entry = { controls, main, letter: '', anchor: 'paid', detailsOpen: false, editingGroup: false, customGroups: new Set() };
+  const entry = { controls, main, letter: '', anchor: 'paid', detailsOpen: false, editingGroup: false, customGroups: new Set(), sourceRef: data.sourceRef };
   controls.active.checked = options.active !== false;
   controls.platform.value = data.platform || '';
   controls.model.value = data.model || '';
@@ -445,33 +474,50 @@ function addQuote(data = {}, options = {}) {
       render();
     });
   }
-  controls.remove.addEventListener('click', () => removeQuote(entry));
+  controls.remove.addEventListener('click', () => confirmQuoteRemoval(entry));
   function onEdit(event) {
     if (event.target === controls.paid || event.target === controls.credit) entry.anchor = event.target.dataset.role;
     render();
   }
   main.addEventListener('input', onEdit);
   controls.extra.addEventListener('input', onEdit);
+  controls.settings.addEventListener('input', onEdit);
+  for (const event of ['click', 'focusin']) main.addEventListener(event, () => selectQuote(entry));
   quoteEntries.push(entry);
   byId('quote-rows').append(fragment);
   queueGroupRefresh();
+  if (!selectedQuote || options.focus) selectQuote(entry);
   if (options.focus) controls.platform.focus();
   return entry;
 }
 
-function removeQuote(entry) {
-  const index = quoteEntries.indexOf(entry);
-  if (index < 0) return;
+function removeQuote(entry) { removeQuotes(new Set([entry])); }
+
+function removeQuotes(entries, update = true) {
+  if (!entries.size) return;
+  const first = quoteEntries.findIndex(entry => entries.has(entry));
+  if (first < 0) return;
+  const selectedIndex = quoteEntries.indexOf(selectedQuote);
+  const fallback = quoteEntries.slice(selectedIndex + 1).find(entry => !entries.has(entry))
+    ?? quoteEntries.slice(0, selectedIndex).reverse().find(entry => !entries.has(entry));
+  const remaining = [];
+  for (const entry of quoteEntries) {
+    if (entries.has(entry)) {
+      entry.main.remove();
+      entry.controls.extra.remove();
+    } else remaining.push(entry);
+  }
   message(byId('quote-match-status'), '');
-  entry.main.remove();
-  entry.controls.extra.remove();
-  quoteEntries.splice(index, 1);
+  quoteEntries.splice(0, quoteEntries.length, ...remaining);
+  for (let i = first; i < remaining.length; i++) numberQuote(remaining[i], i);
+  if (entries.has(selectedQuote)) selectQuote(fallback ?? null);
+  else syncSidebarLabel();
   queueGroupRefresh();
-  for (let i = index; i < quoteEntries.length; i++) numberQuote(quoteEntries[i], i);
-  render();
+  if (update) render();
 }
 
 function resetQuoteTable() {
+  selectQuote();
   quoteEntries.length = 0;
   groupsByPlatform.clear();
   byId('quote-rows').replaceChildren();
@@ -516,13 +562,13 @@ function readQuote(entry, counts) {
   controls['extra-empty'].hidden = unit !== 'cny' || !controls.source.hidden;
   let rate = unit ? one : null;
   if (isCredit) {
-    rate = controls.ratio.value.trim() ? readField(controls.ratio, parseRatio, '充值比例', errors) : null;
+    rate = controls.ratio.value.trim() ? readField(controls.ratio, parseRatio, '汇算', errors) : null;
     if (!controls.ratio.value.trim()) controls.ratio.removeAttribute('aria-invalid');
     const target = anchor === 'paid' ? controls.credit : controls.paid;
     const amount = readField(controls[anchor], parseDecimal, anchor === 'paid' ? '实付费用' : '到账额度', errors);
     target.removeAttribute('aria-invalid');
     target.value = amount === null || rate === null ? '' : convertRecharge(amount, rate, anchor);
-    controls.rate.textContent = rate === null ? '填好充值比例后即可换算。' : '$1 折合 ' + money(rate) + ' · 金额双向联动';
+    controls.rate.textContent = rate === null ? '填好汇算比例后即可换算。' : '$1 折合 ' + money(rate) + ' · 金额双向联动';
   }
   const rates = Object.fromEntries(fields.map(({ id, label }) => {
     controls[id].nextElementSibling.textContent = isCredit ? '$' : unit === 'cny' ? '¥' : '';

@@ -10,7 +10,7 @@ ROOT = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ENTRY.parent.parent
 FILES = (
     'Token计算.html', '界面/calculator.css', '界面/app.js', '界面/controls.js', '计费/billing.js',
     '本地服务/bridge.py', '报价单/quotes.js', '报价单/search.js', '报价单/html-import.js',
-    '报价单/excel.js', '报价单/workbooks.py',
+    '报价单/excel.js', '报价单/workbooks.py', '报价HTML通用识别/识别.js',
 )
 
 def main():

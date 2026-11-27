@@ -68,21 +68,72 @@ function connectQuoteSearch() {
     if (restoreFocus) trigger.focus({ preventScroll: true });
   }
 
-  function choose(index) {
-    const option = options[index];
-    if (!option) return;
-    const selection = selections.get(option.dataset.choice);
-    if (!selection) return;
-    const existing = quoteEntries.find(entry => entry.searchKey === selection.key);
-    highlight(index, false);
-    if (existing) removeQuote(existing);
-    else {
-      const entry = addQuote(selection.row);
-      entry.searchKey = selection.key;
-      entry.searchLabel = option.dataset.label;
-      render();
+  function updateSelection(items, action) {
+    const picked = new Map(quoteEntries.filter(entry => entry.searchKey).map(entry => [entry.searchKey, entry]));
+    const remove = new Set();
+    const visited = new Set();
+    for (const option of items) {
+      const selection = selections.get(option.dataset.choice);
+      if (!selection || visited.has(selection.key)) continue;
+      visited.add(selection.key);
+      const existing = picked.get(selection.key);
+      if (existing) {
+        if (action !== 'all') remove.add(existing);
+      } else if (action !== 'none') {
+        const entry = addQuote(selection.row);
+        entry.searchKey = selection.key;
+        entry.searchLabel = option.dataset.label;
+        picked.set(selection.key, entry);
+      }
     }
+    removeQuotes(remove, false);
+    render();
+  }
+
+  function choose(index) {
+    if (!options[index]) return;
+    highlight(index, false);
+    updateSelection([options[index]], 'invert');
     input.focus({ preventScroll: true });
+  }
+
+  function buildHeading(group, bucket) {
+    const heading = element('div', '', 'quote-search-heading');
+    const system = group.label.startsWith('系统报价单 · ');
+    const label = element('span', system ? group.label.slice('系统报价单 · '.length) : group.label, 'quote-search-group-label');
+    label.title = label.textContent;
+    if (system) {
+      const toolbar = element('span', '', 'quote-search-bulk');
+      toolbar.setAttribute('role', 'group');
+      toolbar.setAttribute('aria-label', group.label + '的批量选择');
+      for (const [action, text, paths] of [
+        ['all', '全选', 'M3 3h18v18H3z M7 12l3 3 7-7'],
+        ['none', '全不选', 'M3 3h18v18H3z M8 12h8'],
+        ['invert', '反选', 'M3 7h16m-4-4 4 4-4 4 M21 17H5m4-4-4 4 4 4']
+      ]) {
+        const button = element('button', '', 'icon-button');
+        button.type = 'button';
+        button.dataset.bulk = action;
+        button.title = text + '当前组搜索结果';
+        button.setAttribute('aria-label', button.title + '：' + group.label);
+        const ns = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(ns, 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor');
+        svg.setAttribute('stroke-width', '1.8');
+        svg.setAttribute('aria-hidden', 'true');
+        const path = document.createElementNS(ns, 'path');
+        path.setAttribute('d', paths);
+        svg.append(path);
+        button.append(svg);
+        button.addEventListener('click', () => updateSelection(bucket.querySelectorAll('[data-choice]'), action));
+        toolbar.append(button);
+      }
+      heading.append(toolbar);
+    }
+    heading.append(label);
+    return heading;
   }
 
   function draw() {
@@ -93,8 +144,8 @@ function connectQuoteSearch() {
     for (const group of select.querySelectorAll('optgroup')) {
       const bucket = element('div', '', 'quote-search-group');
       bucket.setAttribute('role', 'group');
-      bucket.setAttribute('aria-label', group.label);
-      bucket.append(element('div', group.label, 'quote-search-heading'));
+      bucket.setAttribute('aria-label', group.label.replace(/^系统报价单 · /, ''));
+      bucket.append(buildHeading(group, bucket));
       for (const option of group.children) {
         const row = catalog.get(option.value);
         if (!row) continue;
@@ -105,7 +156,7 @@ function connectQuoteSearch() {
         checkbox.type = 'checkbox';
         checkbox.tabIndex = -1;
         checkbox.setAttribute('aria-hidden', 'true');
-        item.append(checkbox, element('span', option.textContent));
+        item.append(checkbox, element('span', quoteName({ ...row, platform: platformShortName(row.platform) })));
         item.dataset.label = option.textContent;
         item.id = 'quote-search-option-' + options.length;
         item.dataset.choice = option.value;
@@ -169,10 +220,6 @@ function connectQuoteSearch() {
   input.addEventListener('keydown', event => {
     if (event.isComposing) return;
     if (event.key === 'Escape') { event.preventDefault(); close(true); }
-    else if (event.key === 'Tab') {
-      close(true);
-      // Retain the browser's normal tab order from the restored trigger.
-    }
     else if (event.key === 'Enter') { event.preventDefault(); choose(active); }
     else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
@@ -184,7 +231,12 @@ function connectQuoteSearch() {
     const option = event.target.closest('[data-choice]');
     if (option) choose(Number(option.dataset.index));
   });
-  document.addEventListener('pointerdown', event => { if (!panel.hidden && !trigger.parentElement.contains(event.target)) close(); });
+  panel.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { event.preventDefault(); close(true); }
+  });
+  for (const eventName of ['pointerdown', 'focusin']) document.addEventListener(eventName, event => {
+    if (!panel.hidden && !trigger.parentElement.contains(event.target)) close();
+  });
   for (const target of [window, window.visualViewport].filter(Boolean)) {
     target.addEventListener('resize', resize, { passive: true });
     target.addEventListener('scroll', resize, { passive: true });

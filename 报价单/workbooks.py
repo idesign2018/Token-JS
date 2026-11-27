@@ -176,7 +176,7 @@ def _column_indices(cells) -> dict[str, int]:
     return indices
 
 
-def _scan_sheet(sheet, filename: str, rows: list[dict], warnings: list[str]) -> None:
+def _scan_sheet(sheet, filename: str, rows: list[dict], warnings: list[str], directory: Path, revision: str) -> None:
     location = f"{filename} / {sheet.title}"
     try:
         platform = _platform(sheet.title)
@@ -198,7 +198,8 @@ def _scan_sheet(sheet, filename: str, rows: list[dict], warnings: list[str]) -> 
             values = {key: cell.value for key, cell in data.items()}
             values["prices"] = {key: values[key] for key in PRICE_KEYS}
             try:
-                valid.append({**_row(platform, values, excel=True), "file": filename, "sheet": sheet.title})
+                ref = {"path": str(directory), "filename": filename, "sheet": sheet.title, "line": line, "revision": revision}
+                valid.append({**_row(platform, values, excel=True), "file": filename, "sheet": sheet.title, "sourceRef": ref})
             except ValueError as error:
                 _warn(warnings, f"{location} 第 {line} 行", error)
         rows.extend(valid)
@@ -245,7 +246,7 @@ def scan(directory: Path, *, filenames: set[str] | None = None) -> dict:
                     if len(book.worksheets) > MAX_SHEETS:
                         _warn(warnings, path.name, f"仅检查前 {MAX_SHEETS} 个工作表。")
                     for sheet in book.worksheets[:MAX_SHEETS]:
-                        _scan_sheet(sheet, path.name, rows, warnings)
+                        _scan_sheet(sheet, path.name, rows, warnings, directory, _revision(info))
                 finally:
                     book.close()
         except Exception as error:  # openpyxl and XML/ZIP parsers raise different exceptions.
@@ -394,6 +395,10 @@ def _file_snapshot(info: os.stat_result) -> tuple:
     return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
+def _revision(info: os.stat_result) -> str:
+    return ":".join(map(str, _file_snapshot(info)))
+
+
 def _assert_unlocked(path: Path) -> None:
     # Excel leaves a companion ownership file while the workbook is open.
     lock_names = {("~$" + path.name).casefold(), ("~$" + path.name[2:]).casefold()}
@@ -480,9 +485,8 @@ def _append_to_book(book, groups: dict[str, list[dict]]) -> int:
     return added
 
 
-def append(directory: Path, filename: str, rows: list) -> dict:
-    """Append only new quotes to an existing workbook, with an atomic final replace."""
-    groups = _row_groups(rows)
+def _update_workbook(directory: Path, filename: str, change, operation: str, revision: str | None = None) -> tuple:
+    """Validate and update an existing workbook under the shared write lock."""
     with _append_lock:
         name = match(directory, filename)
         if name is None:
@@ -491,6 +495,8 @@ def append(directory: Path, filename: str, rows: list) -> dict:
         _assert_unlocked(path)
         before_info = _regular_info(path)
         before = _file_snapshot(before_info)
+        if revision is not None and revision != _revision(before_info):
+            raise WorkbookConflictError("报价单已被修改；请刷新并重新选择这条报价后重试。")
         temporary = None
         try:
             with path.open("rb") as source:
@@ -507,9 +513,9 @@ def append(directory: Path, filename: str, rows: list) -> dict:
                     filterwarnings("error", message=r".*(?:will be removed|will be lost).*", category=UserWarning)
                     book = load_workbook(source, keep_links=True, rich_text=True)
                 try:
-                    added = _append_to_book(book, groups)
-                    if added:
-                        with tempfile.NamedTemporaryFile(prefix=".quote-append-", suffix=".tmp", dir=directory, delete=False) as target:
+                    changed = change(book)
+                    if changed:
+                        with tempfile.NamedTemporaryFile(prefix=".quote-update-", suffix=".tmp", dir=directory, delete=False) as target:
                             temporary = Path(target.name)
                         book.save(temporary)
                         with temporary.open("rb") as validation:
@@ -521,11 +527,44 @@ def append(directory: Path, filename: str, rows: list) -> dict:
                 raise WorkbookConflictError("报价单已被修改，请刷新后重试。")
             if temporary is not None:
                 os.replace(temporary, path)
-            return {"filename": name, "added": added, "skipped": len(rows) - added}
+            return name, changed, _revision(_regular_info(path))
         except PermissionError as error:
             raise WorkbookConflictError("报价单正在使用或没有写入权限，请关闭表格后重试。") from error
         except (BadZipFile, InvalidFileException, KeyError, ParseError, UserWarning) as error:
-            raise ValueError("报价单内容损坏或包含不支持保留的 Excel 功能，未追加。") from error
+            raise ValueError(f"报价单内容损坏或包含不支持保留的 Excel 功能，未{operation}。") from error
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
+
+
+def append(directory: Path, filename: str, rows: list) -> dict:
+    """Append only new quotes to an existing workbook."""
+    groups = _row_groups(rows)
+    name, added, _ = _update_workbook(directory, filename, lambda book: _append_to_book(book, groups), "追加")
+    return {"filename": name, "added": added, "skipped": len(rows) - added}
+
+
+def delete_quote(directory: Path, filename: str, sheet_name: str, line: int, revision: str) -> dict:
+    """Clear one scanned quote without moving other rows or changing their cells."""
+    if (not isinstance(filename, str) or not filename.lower().endswith(".xlsx")
+            or not isinstance(sheet_name, str) or not isinstance(revision, str) or not revision
+            or type(line) is not int or not 2 <= line <= MAX_ROWS + 1):
+        raise ValueError("报价来源不完整，请刷新并重新选择。")
+
+    def clear(book):
+        if sheet_name not in book.sheetnames or not isinstance(book[sheet_name], Worksheet):
+            raise WorkbookConflictError("原报价工作表已不存在，请刷新后重试。")
+        sheet = book[sheet_name]
+        if sheet.protection.sheet or sheet.max_column > MAX_COLUMNS or line > sheet.max_row:
+            raise WorkbookConflictError("原报价行不可修改或已不存在。")
+        columns = _column_indices(sheet[1])
+        cells = [sheet.cell(line, column + 1) for column in columns.values()]
+        if (any(cell.data_type in {"f", "e"} or cell.coordinate in sheet.merged_cells for cell in cells)
+                or all(cell.value in (None, "") for cell in cells)):
+            raise WorkbookConflictError("原报价行包含公式或合并单元格，或已被删除。")
+        for cell in cells:
+            cell.value = None
+        return 1
+
+    name, _, updated = _update_workbook(directory, filename, clear, "删除", revision)
+    return {"filename": name, "revision": updated}
