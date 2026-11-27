@@ -10,6 +10,7 @@
 - **系统报价**：只读取程序旁 `报价单/系统报价单.xlsx` 或 `报价单/内置报价单.xlsx`，没有工作簿就没有系统报价。不会在 JavaScript 或 EXE 中内嵌兜底价格。删除后刷新报价目录或重新打开程序即可；`报价单文件` 中的自定义报价不受影响。历史备份不会被扫描。
 ### 最新
 <img alt="程序UI" src="https://github.com/idesign2018/Token-JS/blob/main/%E6%A1%8C%E9%9D%A2%E7%89%88/UI.png" />
+
 ### 旧
 <img alt="程序UI" src="https://github.com/idesign2018/Token-JS/blob/main/%E6%A1%8C%E9%9D%A2%E7%89%88/%E7%A8%8B%E5%BA%8FUI.png" />
 
